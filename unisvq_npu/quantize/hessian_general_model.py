@@ -27,6 +27,8 @@ parser.add_argument('--act_save_rate', default=4, type=int)
 parser.add_argument('--save_activations', action='store_true')
 parser.add_argument('--sample_proc', default=4, type=int)
 parser.add_argument('--dataset_path', default='/data', type=str)
+parser.add_argument('--shard_id', default=-1, type=int, help='Data shard ID (0-indexed). -1 = use all data.')
+parser.add_argument('--num_shards', default=1, type=int, help='Total number of data shards.')
 
 
 def forward_layer(layer, position_ids, position_embeddings, attention_mask, bs, device, dev_emb):
@@ -57,7 +59,8 @@ def save_result(activation_results, args, transformer_layer_index):
         mu.div_(ct)
         H.div_(ct)
         H.addmm_(-mu.unsqueeze(-1), mu.unsqueeze(0))
-        save_path = f"{args.save_path}/{transformer_layer_index}_{linear_name}.pt"
+        suffix = f".shard{args.shard_id}" if args.shard_id >= 0 else ""
+        save_path = f"{args.save_path}/{transformer_layer_index}_{linear_name}{suffix}.pt"
         torch.save(
             {
                 'flatH': utils.sym_to_flat(H),
@@ -84,7 +87,15 @@ def main(args):
             devset = data['input_ids']
         else:
             devset = data
-        print(f"Loaded pre-tokenized data: {devset.shape}")
+        # Data sharding for multi-NPU
+        if args.shard_id >= 0 and args.num_shards > 1:
+            shard_size = len(devset) // args.num_shards
+            start = args.shard_id * shard_size
+            end = start + shard_size if args.shard_id < args.num_shards - 1 else len(devset)
+            devset = devset[start:end]
+            print(f"Loaded pre-tokenized data: shard {args.shard_id}/{args.num_shards}, {len(devset)} samples")
+        else:
+            print(f"Loaded pre-tokenized data: {devset.shape}")
     elif args.dataset_path == "pajama":
         devset = utils.sample_rp1t_concat(tokenizer, args.devset_size, args.ctx_size, nproc=args.sample_proc)
     elif ".jsonl" in args.dataset_path:
@@ -102,7 +113,14 @@ def main(args):
 
     try:
         import torch_npu  # noqa: F401
-        device = torch.device("npu:0") if torch.npu.is_available() else torch.device("cuda")
+        if torch.npu.is_available():
+            device_id = args.shard_id if args.shard_id >= 0 else 0
+            device_id = device_id % torch.npu.device_count()
+            torch.npu.set_device(device_id)
+            device = torch.device(f"npu:{device_id}")
+            print(f"Using NPU device: {device_id}")
+        else:
+            device = torch.device("cuda")
     except (ImportError, AttributeError):
         device = torch.device("cuda")
 
@@ -143,8 +161,6 @@ def main(args):
         else:
             position_embeddings = None
         layer_activations = {}
-        # NPU does not support float64. Use float32 on-device for speed.
-        # The LDL decomposition tolerates float32 with Tikhonov regularization.
         def hook_generator(layer_name, device):
             def get_hessian_hook(module, x):
                 n = module.in_features
