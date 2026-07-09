@@ -1,0 +1,11 @@
+glog
+tqdm
+numpy
+lm_eval
+ms-swift>=4.3.1
+# fast-hadamard-transform  (NOT NEEDED: replaced by pure PyTorch implementation in lib/utils/matmul_had.py)
+torch==2.9.0
+torch_npu
+# flash-attn==2.8.3  (NOT NEEDED: use sdpa attention on NPU; attn_impl: sdpa in config)
+# deepspeed  (optional: check NPU compatibility; remove if DeepSpeed does not support Ascend)
+transformers==4.52.4
