@@ -136,12 +136,19 @@ def main(args):
     tokenizer.pad_token = tokenizer.eos_token
 
 
-    if args.dataset_path == "pajama":
+    if args.dataset_path.endswith('.pt'):
+        data = torch.load(args.dataset_path, weights_only=True)
+        if isinstance(data, dict):
+            devset = data['input_ids']
+        else:
+            devset = data
+        print(f"Loaded pre-tokenized data: {devset.shape}")
+    elif args.dataset_path == "pajama":
         devset = utils.sample_rp1t_concat(tokenizer, args.devset_size, args.ctx_size, nproc=args.sample_proc)
     elif "jsonl" in args.dataset_path:
         devset = utils.sample_jsonl_concat(args.dataset_path, tokenizer, args.devset_size, args.ctx_size, nproc=args.sample_proc)
     else:
-        not NotImplementedError(args.dataset_path)
+        raise NotImplementedError(args.dataset_path)
     # glog.info('loaded dataset and devset')
 
     first_input = model.model.embed_tokens(devset) # [dataset_shape, seq_len, hidden_size]

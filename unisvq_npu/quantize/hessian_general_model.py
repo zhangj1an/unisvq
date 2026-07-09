@@ -78,12 +78,19 @@ def main(args):
     tokenizer.pad_token = tokenizer.eos_token
 
     print("loading dataset...")
-    if args.dataset_path == "pajama":
+    if args.dataset_path.endswith('.pt'):
+        data = torch.load(args.dataset_path, weights_only=True)
+        if isinstance(data, dict):
+            devset = data['input_ids']
+        else:
+            devset = data
+        print(f"Loaded pre-tokenized data: {devset.shape}")
+    elif args.dataset_path == "pajama":
         devset = utils.sample_rp1t_concat(tokenizer, args.devset_size, args.ctx_size, nproc=args.sample_proc)
     elif ".jsonl" in args.dataset_path:
         devset = utils.sample_jsonl_concat(args.dataset_path, tokenizer, args.devset_size, args.ctx_size, nproc=args.sample_proc)
     else:
-        not NotImplementedError(args.dataset_path)
+        raise NotImplementedError(args.dataset_path)
     dev_emb = model.model.embed_tokens(devset)
     if hasattr(config, "scale_emb"):
         dev_emb = dev_emb * config.scale_emb
@@ -136,14 +143,16 @@ def main(args):
         else:
             position_embeddings = None
         layer_activations = {}
+        # NPU does not support float64. Use float32 on-device for speed.
+        # The LDL decomposition tolerates float32 with Tikhonov regularization.
         def hook_generator(layer_name, device):
             def get_hessian_hook(module, x):
                 n = module.in_features
                 layer_hessian = layer_activations.get(layer_name, {})
-                H = layer_hessian.get("H", torch.zeros(n, n, dtype=torch.float64, device=device))
-                mu = layer_hessian.get("mu", torch.zeros(n, dtype=torch.float64, device=device))
+                H = layer_hessian.get("H", torch.zeros(n, n, dtype=torch.float32, device=device))
+                mu = layer_hessian.get("mu", torch.zeros(n, dtype=torch.float32, device=device))
                 ct = layer_hessian.get("ct", 0)
-                x = x[0].reshape(-1, n).to(torch.float64)
+                x = x[0].reshape(-1, n).to(torch.float32)
                 H.addmm_(x.T, x)
                 mu.add_(x.sum(dim=0))
                 ct += len(x)
