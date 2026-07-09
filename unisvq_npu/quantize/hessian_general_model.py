@@ -53,8 +53,8 @@ def forward_layer(layer, position_ids, position_embeddings, attention_mask, bs, 
 
 def save_result(activation_results, args, transformer_layer_index):
     for linear_name, linear_result in activation_results.items():
-        mu = linear_result["mu"]
-        H = linear_result["H"]
+        mu = linear_result["mu"].cpu()
+        H = linear_result["H"].cpu()
         ct = linear_result["ct"]
         mu.div_(ct)
         H.div_(ct)
